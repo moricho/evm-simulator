@@ -37,14 +37,14 @@ where
     }
 
     pub fn call(&mut self, tx: TransactionRequest) -> Result<TxResult> {
-        self._call(tx, true)
+        self.call_inner(tx, true)
     }
 
     pub fn staticcall(&mut self, tx: TransactionRequest) -> Result<TxResult> {
-        self._call(tx, false)
+        self.call_inner(tx, false)
     }
 
-    fn _call(&mut self, tx: TransactionRequest, commit: bool) -> Result<TxResult> {
+    fn call_inner(&mut self, tx: TransactionRequest, commit: bool) -> Result<TxResult> {
         self.evm.context.evm.env.tx.caller = tx.from.unwrap_or(self.owner);
         let to = match tx.to.unwrap_or_default() {
             TxKind::Call(to) => to,
