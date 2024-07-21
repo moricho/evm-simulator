@@ -10,12 +10,11 @@ use revm::{
     primitives::{ExecutionResult, Output, TransactTo},
     Evm,
 };
-use std::cell::RefCell;
 use std::marker::Unpin;
 
 pub struct EvmSimulator<'a, T, P> {
     pub provider: P,
-    pub evm: RefCell<Evm<'a, (), CacheDB<SharedBackend>>>,
+    pub evm: Evm<'a, (), CacheDB<SharedBackend>>,
     pub owner: Address,
     pub block_number: U64,
     _pd: std::marker::PhantomData<T>,
@@ -34,37 +33,36 @@ where
         );
         let db = CacheDB::new(shared_backend);
         let evm = Evm::builder().with_db(db).build();
-        let evm = RefCell::new(evm);
         Self { provider, evm, owner, block_number, _pd: std::marker::PhantomData }
     }
 
-    pub fn call(&self, tx: TransactionRequest) -> Result<TxResult> {
+    pub fn call(&mut self, tx: TransactionRequest) -> Result<TxResult> {
         self._call(tx, true)
     }
 
-    pub fn staticcall(&self, tx: TransactionRequest) -> Result<TxResult> {
+    pub fn staticcall(&mut self, tx: TransactionRequest) -> Result<TxResult> {
         self._call(tx, false)
     }
 
-    fn _call(&self, tx: TransactionRequest, commit: bool) -> Result<TxResult> {
-        let mut evm = self.evm.borrow_mut();
-        evm.context.evm.env.tx.caller = tx.from.unwrap_or(self.owner);
+    fn _call(&mut self, tx: TransactionRequest, commit: bool) -> Result<TxResult> {
+        self.evm.context.evm.env.tx.caller = tx.from.unwrap_or(self.owner);
         let to = match tx.to.unwrap_or_default() {
             TxKind::Call(to) => to,
             TxKind::Create => Address::default(),
         };
-        evm.context.evm.env.tx.transact_to = TransactTo::Call(to);
-        evm.context.evm.env.tx.data = tx.input.data.unwrap_or_default();
-        evm.context.evm.env.tx.value = tx.value.unwrap_or_default();
-        evm.context.evm.env.tx.gas_limit = 5000000;
+        self.evm.context.evm.env.tx.transact_to = TransactTo::Call(to);
+        self.evm.context.evm.env.tx.data = tx.input.data.unwrap_or_default();
+        self.evm.context.evm.env.tx.value = tx.value.unwrap_or_default();
+        self.evm.context.evm.env.tx.gas_limit = 5000000;
 
         let result = if commit {
-            match evm.transact_commit() {
+            match self.evm.transact_commit() {
                 Ok(result) => result,
                 Err(e) => return Err(anyhow!("EVM call failed: {:?}", e)),
             }
         } else {
-            let ref_tx = evm.transact().map_err(|e| anyhow!("EVM staticcall failed: {:?}", e))?;
+            let ref_tx =
+                self.evm.transact().map_err(|e| anyhow!("EVM staticcall failed: {:?}", e))?;
             ref_tx.result
         };
 
