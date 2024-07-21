@@ -1,0 +1,21 @@
+[package]
+name = "evm-simulator"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+alloy = { version = "0.2.0", features = [
+  "network",
+  "transports",
+  "providers",
+  "rpc-types",
+] }
+anyhow = "1.0.79"
+dotenv = "0.15.0"
+foundry-fork-db = "0.2.0"
+revm = "12.1.0"
+tokio = { version = "1.38.0", default-features = false, features = [
+  "rt-multi-thread",
+  "time",
+] }
+tracing = "0.1.40"
