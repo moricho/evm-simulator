@@ -7,8 +7,9 @@ edition = "2021"
 alloy = { version = "0.2.0", features = [
   "network",
   "transports",
-  "providers",
   "rpc-types",
+  "provider-trace-api",
+  "serde",
 ] }
 anyhow = "1.0.79"
 dotenv = "0.15.0"

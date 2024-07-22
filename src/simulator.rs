@@ -1,7 +1,10 @@
 use alloy::network::AnyNetwork;
 use alloy::primitives::{Address, Bytes, TxKind, U64};
+use alloy::providers::ext::TraceApi;
 use alloy::providers::Provider;
-use alloy::rpc::types::TransactionRequest;
+use alloy::rpc::types::trace::parity::TraceType;
+use alloy::rpc::types::{trace::parity::TraceResults, TransactionRequest};
+use alloy::serde::WithOtherFields;
 use alloy::transports::Transport;
 use anyhow::{anyhow, Result};
 use foundry_fork_db::{cache::BlockchainDbMeta, BlockchainDb, SharedBackend};
@@ -36,22 +39,40 @@ where
         Self { provider, evm, owner, block_number, _pd: std::marker::PhantomData }
     }
 
-    pub fn call(&mut self, tx: TransactionRequest) -> Result<TxResult> {
+    pub fn call(&mut self, tx: WithOtherFields<TransactionRequest>) -> Result<TxResult> {
         self.call_inner(tx, true)
     }
 
-    pub fn staticcall(&mut self, tx: TransactionRequest) -> Result<TxResult> {
+    pub fn staticcall(&mut self, tx: WithOtherFields<TransactionRequest>) -> Result<TxResult> {
         self.call_inner(tx, false)
     }
 
-    fn call_inner(&mut self, tx: TransactionRequest, commit: bool) -> Result<TxResult> {
+    pub async fn call_with_trace(
+        &mut self,
+        tx: WithOtherFields<TransactionRequest>,
+        trace_types: Vec<TraceType>,
+    ) -> Result<TxResultWithTrace> {
+        let trace = self
+            .provider
+            .trace_call(&tx, &trace_types)
+            .await
+            .map_err(|e| anyhow!("Failed to trace call: {:?}", e))?;
+        let result = self.call(tx)?;
+        Ok(TxResultWithTrace { result, trace })
+    }
+
+    fn call_inner(
+        &mut self,
+        tx: WithOtherFields<TransactionRequest>,
+        commit: bool,
+    ) -> Result<TxResult> {
         self.evm.context.evm.env.tx.caller = tx.from.unwrap_or(self.owner);
         let to = match tx.to.unwrap_or_default() {
             TxKind::Call(to) => to,
             TxKind::Create => Address::default(),
         };
         self.evm.context.evm.env.tx.transact_to = TransactTo::Call(to);
-        self.evm.context.evm.env.tx.data = tx.input.data.unwrap_or_default();
+        self.evm.context.evm.env.tx.data = tx.input.data.clone().unwrap_or_default();
         self.evm.context.evm.env.tx.value = tx.value.unwrap_or_default();
         self.evm.context.evm.env.tx.gas_limit = 5000000;
 
@@ -86,4 +107,10 @@ pub struct TxResult {
     pub output: Bytes,
     pub gas_used: u64,
     pub gas_refunded: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct TxResultWithTrace {
+    pub result: TxResult,
+    pub trace: TraceResults,
 }
