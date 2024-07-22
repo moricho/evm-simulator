@@ -1,13 +1,20 @@
-use alloy::network::Network;
-use alloy::providers::Provider;
-use alloy::rpc::types::{BlockId, BlockTransactionsKind};
-use alloy::transports::Transport;
-use revm::db::{AlloyDB, CacheDB, StateBuilder};
-use revm::inspectors::TracerEip3155;
-use revm::primitives::{AccessListItem, TxKind, B256, U256};
-use revm::{inspector_handle_register, Evm};
-use std::io::{Result as IoResult, Write};
-use std::sync::{Arc, Mutex};
+use alloy::{
+    network::Network,
+    providers::Provider,
+    rpc::types::{BlockId, BlockTransactionsKind},
+    transports::Transport,
+};
+use revm::{
+    db::{AlloyDB, CacheDB, StateBuilder},
+    inspector_handle_register,
+    inspectors::TracerEip3155,
+    primitives::{AccessListItem, TxKind, B256, U256},
+    Evm,
+};
+use std::{
+    io::{Result as IoResult, Write},
+    sync::{Arc, Mutex},
+};
 
 struct Writer(Arc<Mutex<Box<dyn Write + Send + 'static>>>);
 

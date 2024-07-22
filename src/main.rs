@@ -1,6 +1,4 @@
-use alloy::eips::BlockId;
-use alloy::network::Ethereum;
-use alloy::providers::ProviderBuilder;
+use alloy::{eips::BlockId, network::Ethereum, providers::ProviderBuilder};
 use anyhow::Result;
 use evm_simulator::EvmSimulator;
 use url::Url;
