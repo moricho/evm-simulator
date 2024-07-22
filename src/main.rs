@@ -2,7 +2,7 @@ use alloy::eips::BlockId;
 use alloy::network::Ethereum;
 use alloy::providers::ProviderBuilder;
 use anyhow::Result;
-use evm_simulator::EvmSimulator2;
+use evm_simulator::EvmSimulator;
 use url::Url;
 
 #[tokio::main]
@@ -21,7 +21,7 @@ async fn main() -> Result<()> {
 
     let writer = Box::new(std::io::stdout());
 
-    let mut evm_simulator = EvmSimulator2::new(provider, writer);
+    let mut evm_simulator = EvmSimulator::new(provider, writer);
 
     evm_simulator.block_traces(BlockId::latest()).await?;
 

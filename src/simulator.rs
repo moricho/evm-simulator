@@ -1,117 +1,150 @@
-use alloy::eips::BlockNumberOrTag;
-use alloy::network::AnyNetwork;
-use alloy::primitives::{Address, Bytes, TxKind};
-use alloy::providers::{ext::TraceApi, Provider};
-use alloy::rpc::types::{
-    trace::parity::{TraceResults, TraceType},
-    TransactionRequest,
-};
-use alloy::serde::WithOtherFields;
+use alloy::network::Network;
+use alloy::providers::Provider;
+use alloy::rpc::types::{BlockId, BlockTransactionsKind};
 use alloy::transports::Transport;
-use anyhow::{anyhow, Result};
-use foundry_fork_db::{cache::BlockchainDbMeta, BlockchainDb, SharedBackend};
-use revm::{
-    db::CacheDB,
-    primitives::{ExecutionResult, Output, TransactTo},
-    Evm,
-};
-use std::marker::Unpin;
+use indicatif::ProgressBar;
+use revm::db::{AlloyDB, CacheDB, StateBuilder};
+use revm::inspectors::TracerEip3155;
+use revm::primitives::{AccessListItem, TxKind, B256, U256};
+use revm::{inspector_handle_register, Evm};
+use std::io::{Result as IoResult, Write};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
-#[derive(Debug, Clone)]
-pub struct TxResult {
-    pub output: Bytes,
-    pub gas_used: u64,
-    pub gas_refunded: u64,
+struct Writer(Arc<Mutex<Box<dyn Write + Send + 'static>>>);
+
+impl Write for Writer {
+    fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
+        self.0.lock().unwrap().write(buf)
+    }
+
+    fn flush(&mut self) -> IoResult<()> {
+        self.0.lock().unwrap().flush()
+    }
 }
 
-#[derive(Debug, Clone)]
-pub struct TxResultWithTrace {
-    pub result: TxResult,
-    pub trace: TraceResults,
-}
-
-pub struct EvmSimulator<'a, T, P> {
+pub struct EvmSimulator<T, N, P> {
     pub provider: P,
-    pub evm: Evm<'a, (), CacheDB<SharedBackend>>,
-    pub block_number: BlockNumberOrTag,
-    _pd: std::marker::PhantomData<T>,
+    writer: Arc<Mutex<Box<dyn Write + Send + 'static>>>,
+    _pd: std::marker::PhantomData<(T, N)>,
 }
 
-impl<'a, T, P> EvmSimulator<'a, T, P>
+impl<T, N, P> EvmSimulator<T, N, P>
 where
-    T: Transport + Clone + Unpin,
-    P: Provider<T, AnyNetwork> + Clone + Unpin + 'static,
+    T: Transport + Clone,
+    N: Network,
+    P: Provider<T, N> + Clone + 'static,
 {
-    pub fn new(provider: P, block_number: BlockNumberOrTag) -> Self {
-        let shared_backend = SharedBackend::spawn_backend_thread(
-            provider.clone(),
-            BlockchainDb::new(BlockchainDbMeta::new(Default::default(), "".to_string()), None),
-            Some(block_number.into()),
-        );
-        let db = CacheDB::new(shared_backend);
-        let evm = Evm::builder().with_db(db).build();
-        Self { provider, evm, block_number, _pd: std::marker::PhantomData }
+    pub fn new(provider: P, writer: Box<dyn Write + Send + 'static>) -> Self {
+        Self { provider, writer: Arc::new(Mutex::new(writer)), _pd: std::marker::PhantomData }
     }
 
-    pub fn call(&mut self, tx: WithOtherFields<TransactionRequest>) -> Result<TxResult> {
-        self.call_inner(tx, true)
-    }
+    pub async fn block_traces(&mut self, block_id: BlockId) -> anyhow::Result<()> {
+        let provider = self.provider.clone();
 
-    pub fn staticcall(&mut self, tx: WithOtherFields<TransactionRequest>) -> Result<TxResult> {
-        self.call_inner(tx, false)
-    }
-
-    pub async fn call_with_trace(
-        &mut self,
-        tx: WithOtherFields<TransactionRequest>,
-        trace_types: Vec<TraceType>,
-    ) -> Result<TxResultWithTrace> {
-        let trace = self
-            .provider
-            .trace_call(&tx, &trace_types)
-            .await
-            .map_err(|e| anyhow!("Failed to trace call: {:?}", e))?;
-        let result = self.call(tx)?;
-        Ok(TxResultWithTrace { result, trace })
-    }
-
-    fn call_inner(
-        &mut self,
-        tx: WithOtherFields<TransactionRequest>,
-        commit: bool,
-    ) -> Result<TxResult> {
-        self.evm.context.evm.env.tx.caller = tx.from.unwrap_or_default();
-        let to = match tx.to.unwrap_or_default() {
-            TxKind::Call(to) => to,
-            TxKind::Create => Address::default(),
+        // Fetch the block with full transactions
+        let block = match provider.get_block(block_id, BlockTransactionsKind::Full).await {
+            Ok(Some(block)) => block,
+            Ok(None) => anyhow::bail!("Block not found"),
+            Err(error) => anyhow::bail!("Error: {:?}", error),
         };
-        self.evm.context.evm.env.tx.transact_to = TransactTo::Call(to);
-        self.evm.context.evm.env.tx.data = tx.input.data.clone().unwrap_or_default();
-        self.evm.context.evm.env.tx.value = tx.value.unwrap_or_default();
-        self.evm.context.evm.env.tx.gas_limit = 5000000;
+        let block_num = block.header.number.expect("Block number not found");
+        println!("Fetched block number: {}", block_num);
 
-        let result = if commit {
-            match self.evm.transact_commit() {
-                Ok(result) => result,
-                Err(e) => return Err(anyhow!("EVM call failed: {:?}", e)),
+        let prev_block_number = block_num - 1;
+        let chain_id = provider.get_chain_id().await.expect("Failed to get chain id");
+
+        // Use the previous block state as the db with caching
+        let prev_block_id: BlockId = prev_block_number.into();
+        let state_db =
+            AlloyDB::new(provider.clone(), prev_block_id).expect("Failed to create AlloyDB");
+        let cache_db: CacheDB<AlloyDB<T, N, P>> = CacheDB::new(state_db);
+        let mut state = StateBuilder::new_with_database(cache_db).build();
+
+        let writer = Writer(self.writer.clone());
+        let mut evm = Evm::builder()
+            .with_db(&mut state)
+            .with_external_context(TracerEip3155::new(Box::new(writer)))
+            .modify_block_env(|b| {
+                if let Some(number) = block.header.number {
+                    b.number = U256::from(number);
+                }
+                b.coinbase = block.header.miner;
+                b.timestamp = U256::from(block.header.timestamp);
+                b.difficulty = U256::from(block.header.difficulty);
+                b.gas_limit = U256::from(block.header.gas_limit);
+                if let Some(base_fee) = block.header.base_fee_per_gas {
+                    b.basefee = U256::from(base_fee);
+                }
+            })
+            .modify_cfg_env(|c| {
+                c.chain_id = chain_id;
+            })
+            .append_handler_register(inspector_handle_register)
+            .build();
+
+        let txs = block.transactions.len();
+        println!("Found {txs} transactions.");
+
+        let console_bar = Arc::new(ProgressBar::new(txs as u64));
+        let start = Instant::now();
+
+        for tx in block.transactions.into_transactions() {
+            evm = evm
+                .modify()
+                .modify_tx_env(|etx| {
+                    etx.caller = tx.from;
+                    etx.gas_limit = tx.gas as u64;
+                    if let Some(gas_price) = tx.gas_price {
+                        etx.gas_price = U256::from(gas_price);
+                    }
+                    etx.value = U256::from(tx.value);
+                    etx.data = tx.input.0.into();
+                    let mut gas_priority_fee = U256::ZERO;
+                    if let Some(max_priority_fee_per_gas) = tx.max_priority_fee_per_gas {
+                        gas_priority_fee = U256::from(max_priority_fee_per_gas);
+                    }
+                    etx.gas_priority_fee = Some(gas_priority_fee);
+                    etx.chain_id = Some(chain_id);
+                    etx.nonce = Some(tx.nonce);
+                    if let Some(access_list) = tx.access_list {
+                        etx.access_list = access_list
+                            .0
+                            .into_iter()
+                            .map(|item| {
+                                let storage_keys: Vec<B256> = item
+                                    .storage_keys
+                                    .into_iter()
+                                    .map(|h256| B256::new(h256.0))
+                                    .collect();
+
+                                AccessListItem { address: item.address, storage_keys }
+                            })
+                            .collect();
+                    } else {
+                        etx.access_list = Default::default();
+                    }
+
+                    etx.transact_to = match tx.to {
+                        Some(to_address) => TxKind::Call(to_address),
+                        None => TxKind::Create,
+                    };
+                })
+                .build();
+
+            // Inspect and commit the transaction to the EVM
+            if let Err(error) = evm.transact_commit() {
+                println!("Got error: {:?}", error);
             }
-        } else {
-            let ref_tx =
-                self.evm.transact().map_err(|e| anyhow!("EVM staticcall failed: {:?}", e))?;
-            ref_tx.result
-        };
 
-        let output = match result {
-            ExecutionResult::Success { gas_used, gas_refunded, output, .. } => match output {
-                Output::Call(o) => TxResult { output: o.into(), gas_used, gas_refunded },
-                Output::Create(o, _) => TxResult { output: o.into(), gas_used, gas_refunded },
-            },
-            ExecutionResult::Revert { gas_used, output } => {
-                return Err(anyhow!("EVM REVERT: {:?} / Gas used: {:?}", output, gas_used))
-            }
-            ExecutionResult::Halt { reason, .. } => return Err(anyhow!("EVM HALT: {:?}", reason)),
-        };
+            console_bar.inc(1);
+        }
 
-        Ok(output)
+        console_bar.finish_with_message("Finished all transactions.");
+
+        let elapsed = start.elapsed();
+        println!("Finished execution. Total CPU time: {:.6}s", elapsed.as_secs_f64());
+
+        Ok(())
     }
 }
