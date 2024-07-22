@@ -1,9 +1,10 @@
 use alloy::network::AnyNetwork;
 use alloy::primitives::{Address, Bytes, TxKind, U64};
-use alloy::providers::ext::TraceApi;
-use alloy::providers::Provider;
-use alloy::rpc::types::trace::parity::TraceType;
-use alloy::rpc::types::{trace::parity::TraceResults, TransactionRequest};
+use alloy::providers::{ext::TraceApi, Provider};
+use alloy::rpc::types::{
+    trace::parity::{TraceResults, TraceType},
+    TransactionRequest,
+};
 use alloy::serde::WithOtherFields;
 use alloy::transports::Transport;
 use anyhow::{anyhow, Result};
