@@ -14,7 +14,8 @@ alloy = { version = "0.2.0", features = [
 anyhow = "1.0.79"
 dotenv = "0.15.0"
 foundry-fork-db = "0.2.0"
-revm = "12.1.0"
+indicatif = "0.17.8"
+revm = { version = "12.1.0", features = ["std", "serde-json", "alloydb"] }
 tokio = { version = "1.38.0", default-features = false, features = [
   "rt-multi-thread",
   "time",

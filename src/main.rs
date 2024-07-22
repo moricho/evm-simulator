@@ -1,8 +1,8 @@
-use alloy::eips::BlockNumberOrTag;
-use alloy::network::AnyNetwork;
+use alloy::eips::BlockId;
+use alloy::network::Ethereum;
 use alloy::providers::ProviderBuilder;
 use anyhow::Result;
-use evm_simulator::EvmSimulator;
+use evm_simulator::EvmSimulator2;
 use url::Url;
 
 #[tokio::main]
@@ -15,11 +15,15 @@ async fn main() -> Result<()> {
         Url::parse(format!("{}/{}", alchemy_api_endpoint, alchemy_api_key).as_str())?;
 
     let provider = ProviderBuilder::new()
-        .network::<AnyNetwork>()
+        .network::<Ethereum>()
         .with_recommended_fillers()
         .on_http(alchemy_api_url);
 
-    let _evm_simulator = EvmSimulator::new(provider, BlockNumberOrTag::Latest);
+    let writer = Box::new(std::io::stdout());
+
+    let mut evm_simulator = EvmSimulator2::new(provider, writer);
+
+    evm_simulator.block_traces(BlockId::latest()).await?;
 
     Ok(())
 }
