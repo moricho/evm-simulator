@@ -2,14 +2,12 @@ use alloy::network::Network;
 use alloy::providers::Provider;
 use alloy::rpc::types::{BlockId, BlockTransactionsKind};
 use alloy::transports::Transport;
-use indicatif::ProgressBar;
 use revm::db::{AlloyDB, CacheDB, StateBuilder};
 use revm::inspectors::TracerEip3155;
 use revm::primitives::{AccessListItem, TxKind, B256, U256};
 use revm::{inspector_handle_register, Evm};
 use std::io::{Result as IoResult, Write};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 struct Writer(Arc<Mutex<Box<dyn Write + Send + 'static>>>);
 
@@ -86,9 +84,6 @@ where
         let txs = block.transactions.len();
         println!("Found {txs} transactions.");
 
-        let console_bar = Arc::new(ProgressBar::new(txs as u64));
-        let start = Instant::now();
-
         for tx in block.transactions.into_transactions() {
             evm = evm
                 .modify()
@@ -136,14 +131,7 @@ where
             if let Err(error) = evm.transact_commit() {
                 println!("Got error: {:?}", error);
             }
-
-            console_bar.inc(1);
         }
-
-        console_bar.finish_with_message("Finished all transactions.");
-
-        let elapsed = start.elapsed();
-        println!("Finished execution. Total CPU time: {:.6}s", elapsed.as_secs_f64());
 
         Ok(())
     }
