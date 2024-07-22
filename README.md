@@ -30,7 +30,7 @@ use url::Url;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Set up your Ethereum provider (e.g., Alchemy)
-    let alchemy_api_url = Url::parse("https://eth-mainnet.alchemyapi.io/v2/your-api-key")?;
+    let alchemy_api_url = Url::parse("https://eth-mainnet.g.alchemy.com/v2/your-api-key")?;
 
     let provider = ProviderBuilder::new()
         .network::<AnyNetwork>()
