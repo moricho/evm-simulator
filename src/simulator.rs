@@ -1,5 +1,6 @@
+use alloy::eips::BlockNumberOrTag;
 use alloy::network::AnyNetwork;
-use alloy::primitives::{Address, Bytes, TxKind, U64};
+use alloy::primitives::{Address, Bytes, TxKind};
 use alloy::providers::{ext::TraceApi, Provider};
 use alloy::rpc::types::{
     trace::parity::{TraceResults, TraceType},
@@ -16,11 +17,23 @@ use revm::{
 };
 use std::marker::Unpin;
 
+#[derive(Debug, Clone)]
+pub struct TxResult {
+    pub output: Bytes,
+    pub gas_used: u64,
+    pub gas_refunded: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct TxResultWithTrace {
+    pub result: TxResult,
+    pub trace: TraceResults,
+}
+
 pub struct EvmSimulator<'a, T, P> {
     pub provider: P,
     pub evm: Evm<'a, (), CacheDB<SharedBackend>>,
-    pub owner: Address,
-    pub block_number: U64,
+    pub block_number: BlockNumberOrTag,
     _pd: std::marker::PhantomData<T>,
 }
 
@@ -29,7 +42,7 @@ where
     T: Transport + Clone + Unpin,
     P: Provider<T, AnyNetwork> + Clone + Unpin + 'static,
 {
-    pub fn new(provider: P, owner: Address, block_number: U64) -> Self {
+    pub fn new(provider: P, block_number: BlockNumberOrTag) -> Self {
         let shared_backend = SharedBackend::spawn_backend_thread(
             provider.clone(),
             BlockchainDb::new(BlockchainDbMeta::new(Default::default(), "".to_string()), None),
@@ -37,7 +50,7 @@ where
         );
         let db = CacheDB::new(shared_backend);
         let evm = Evm::builder().with_db(db).build();
-        Self { provider, evm, owner, block_number, _pd: std::marker::PhantomData }
+        Self { provider, evm, block_number, _pd: std::marker::PhantomData }
     }
 
     pub fn call(&mut self, tx: WithOtherFields<TransactionRequest>) -> Result<TxResult> {
@@ -67,7 +80,7 @@ where
         tx: WithOtherFields<TransactionRequest>,
         commit: bool,
     ) -> Result<TxResult> {
-        self.evm.context.evm.env.tx.caller = tx.from.unwrap_or(self.owner);
+        self.evm.context.evm.env.tx.caller = tx.from.unwrap_or_default();
         let to = match tx.to.unwrap_or_default() {
             TxKind::Call(to) => to,
             TxKind::Create => Address::default(),
@@ -101,17 +114,4 @@ where
 
         Ok(output)
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct TxResult {
-    pub output: Bytes,
-    pub gas_used: u64,
-    pub gas_refunded: u64,
-}
-
-#[derive(Debug, Clone)]
-pub struct TxResultWithTrace {
-    pub result: TxResult,
-    pub trace: TraceResults,
 }
